@@ -91,10 +91,18 @@ func main() {
 	}
 
 	idx := 0
+	var collectedData []*Customer
 	for data := range elMessageChannel {
-		indexCustomers(data)
 		idx++
-		if (idx == counter) {
+		collectedData = append(collectedData, data...)
+		if idx % 7 == 0 {
+			indexCustomers(collectedData)
+			collectedData = nil
+		}
+		if idx == counter {
+			if collectedData != nil {
+				indexCustomers(collectedData)
+			}
 			close(elMessageChannel)
 		}
 	}
