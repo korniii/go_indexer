@@ -44,9 +44,13 @@ const (
 	dbname   = "example"
 )
 
-var batch int
+var (
+	querySize int
+	batch int
+)
 
 func init() {
+	flag.IntVar(&querySize, "querySize", 100, "Number of customers pulled in one query")
 	flag.IntVar(&batch, "batch", 255, "Number of documents to send in one batch")
 	flag.Parse()
 
@@ -55,9 +59,39 @@ func init() {
 
 func main() {
 
-	data := fetchCustomers()
+	start := time.Now().UTC()
 
-	indexCustomers(data)
+	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
+		"password=%s dbname=%s sslmode=disable",
+		host, port, user, password, dbname)
+
+	db, err := sql.Open("postgres", psqlInfo)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	ctx := context.Background()
+
+	numOfRecords, err := models.Customers().Count(ctx, db)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	log.Printf("bla %d", querySize)
+	log.Printf("blub %d", numOfRecords)
+
+ 
+	for i := 0; i < int(numOfRecords); i += querySize {
+		log.Printf("Indexing records from %d to %d", i, i + querySize)
+		data := fetchCustomers(db, ctx, querySize, i)
+		indexCustomers(data)
+	}
+
+	// data := fetchCustomers(db, ctx, 100, 0)
+	// indexCustomers(data)
+
+	duration := time.Since(start)
+	log.Printf("Total time taken -> %s", duration.Truncate(time.Millisecond))
 
 }
 
@@ -255,26 +289,10 @@ func indexCustomers(customers []*Customer) {
 
 }
 
-func fetchCustomers() []*Customer {
-	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
-		"password=%s dbname=%s sslmode=disable",
-		host, port, user, password, dbname)
+func fetchCustomers(db *sql.DB, ctx context.Context, _limit int, _offset int) []*Customer {
+	
 
-	db, err := sql.Open("postgres", psqlInfo)
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	ctx := context.Background()
-
-	err = db.Ping()
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Println("Successfully connected!")
-
-	custmrs, err := models.Customers(Load("Orders.Items")).All(ctx, db)
+	custmrs, err := models.Customers(Load("Orders.Items"), Limit(_limit), Offset(_offset)).All(ctx, db)
 	if err != nil {
 		log.Fatalln(err)
 	}
