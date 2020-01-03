@@ -46,7 +46,7 @@ const (
 
 var (
 	querySize int
-	batch int
+	batch     int
 )
 
 func init() {
@@ -77,18 +77,27 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	log.Printf("bla %d", querySize)
-	log.Printf("blub %d", numOfRecords)
+	convNumOfRecords := int(numOfRecords)
 
- 
-	for i := 0; i < int(numOfRecords); i += querySize {
-		log.Printf("Indexing records from %d to %d", i, i + querySize)
-		data := fetchCustomers(db, ctx, querySize, i)
-		indexCustomers(data)
+	//ToDo: sent messages to channel
+	elMessageChannel := make(chan []*Customer)
+
+	counter := 0
+
+	for i := 0; i < convNumOfRecords; i += querySize {
+		log.Printf("Indexing records from %d to %d", i, i+querySize)
+		go fetchCustomers(db, ctx, elMessageChannel, querySize, i)
+		counter++
 	}
 
-	// data := fetchCustomers(db, ctx, 100, 0)
-	// indexCustomers(data)
+	idx := 0
+	for data := range elMessageChannel {
+		indexCustomers(data)
+		idx++
+		if (idx == counter) {
+			close(elMessageChannel)
+		}
+	}
 
 	duration := time.Since(start)
 	log.Printf("Total time taken -> %s", duration.Truncate(time.Millisecond))
@@ -142,16 +151,16 @@ func indexCustomers(customers []*Customer) {
 	}
 
 	//(re-)create index
-	if res, err = es.Indices.Delete([]string{indexName}); err != nil {
-		log.Fatalf("Cannot delete index: %s", err)
-	}
-	res, err = es.Indices.Create(indexName)
-	if err != nil {
-		log.Fatalf("Cannot create index: %s", err)
-	}
-	if res.IsError() {
-		log.Fatalf("Cannot create index: %s", res)
-	}
+	// if res, err = es.Indices.Delete([]string{indexName}); err != nil {
+	// 	log.Fatalf("Cannot delete index: %s", err)
+	// }
+	// res, err = es.Indices.Create(indexName)
+	// if err != nil {
+	// 	log.Fatalf("Cannot create index: %s", err)
+	// }
+	// if res.IsError() {
+	// 	log.Fatalf("Cannot create index: %s", res)
+	// }
 
 	if count%batch == 0 {
 		numBatches = (count / batch)
@@ -289,8 +298,7 @@ func indexCustomers(customers []*Customer) {
 
 }
 
-func fetchCustomers(db *sql.DB, ctx context.Context, _limit int, _offset int) []*Customer {
-	
+func fetchCustomers(db *sql.DB, ctx context.Context, ch chan<- []*Customer,_limit int, _offset int) {
 
 	custmrs, err := models.Customers(Load("Orders.Items"), Limit(_limit), Offset(_offset)).All(ctx, db)
 	if err != nil {
@@ -324,5 +332,5 @@ func fetchCustomers(db *sql.DB, ctx context.Context, _limit int, _offset int) []
 		})
 	}
 
-	return elEntries
+	ch <- elEntries
 }
