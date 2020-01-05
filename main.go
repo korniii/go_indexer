@@ -61,45 +61,20 @@ func main() {
 
 	start := time.Now().UTC()
 
-	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
-		"password=%s dbname=%s sslmode=disable",
-		host, port, user, password, dbname)
-
-	db, err := sql.Open("postgres", psqlInfo)
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	ctx := context.Background()
-
-	numOfRecords, err := models.Customers().Count(ctx, db)
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	convNumOfRecords := int(numOfRecords)
-
-	//ToDo: sent messages to channel
 	elMessageChannel := make(chan []*Customer)
 
-	counter := 0
-
-	for i := 0; i < convNumOfRecords; i += querySize {
-		log.Printf("Indexing records from %d to %d", i, i+querySize)
-		go fetchCustomers(db, ctx, elMessageChannel, querySize, i)
-		counter++
-	}
+	numOfSpawnedGoRoutines := spawnProducers(elMessageChannel)
 
 	idx := 0
 	var collectedData []*Customer
 	for data := range elMessageChannel {
 		idx++
 		collectedData = append(collectedData, data...)
-		if idx % 7 == 0 {
+		if idx%7 == 0 {
 			indexCustomers(collectedData)
 			collectedData = nil
 		}
-		if idx == counter {
+		if idx == numOfSpawnedGoRoutines {
 			if collectedData != nil {
 				indexCustomers(collectedData)
 			}
@@ -306,7 +281,37 @@ func indexCustomers(customers []*Customer) {
 
 }
 
-func fetchCustomers(db *sql.DB, ctx context.Context, ch chan<- []*Customer,_limit int, _offset int) {
+func spawnProducers(_elMessageChannel chan<- []*Customer) int {
+	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
+		"password=%s dbname=%s sslmode=disable",
+		host, port, user, password, dbname)
+
+	db, err := sql.Open("postgres", psqlInfo)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	ctx := context.Background()
+
+	numOfRecords, err := models.Customers().Count(ctx, db)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	convNumOfRecords := int(numOfRecords)
+
+	numOfSpawnedGoRoutines := 0
+
+	for i := 0; i < convNumOfRecords; i += querySize {
+		log.Printf("Indexing records from %d to %d", i, i+querySize)
+		go fetchCustomers(db, ctx, _elMessageChannel, querySize, i)
+		numOfSpawnedGoRoutines++
+	}
+
+	return numOfSpawnedGoRoutines
+}
+
+func fetchCustomers(db *sql.DB, ctx context.Context, ch chan<- []*Customer, _limit int, _offset int) {
 
 	custmrs, err := models.Customers(Load("Orders.Items"), Limit(_limit), Offset(_offset)).All(ctx, db)
 	if err != nil {
