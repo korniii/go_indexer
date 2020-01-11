@@ -50,14 +50,30 @@ const (
 var (
 	querySize int
 	batch     int
+	db		  *sql.DB
+	ctx		  context.Context
 )
 
 func init() {
+	//parse commandline parameters
 	flag.IntVar(&querySize, "querySize", 100, "Number of customers pulled in one query")
 	flag.IntVar(&batch, "batch", 255, "Number of documents to send in one batch")
 	flag.Parse()
 
 	rand.Seed(time.Now().UnixNano())
+
+	//open global db connecion
+	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
+		"password=%s dbname=%s sslmode=disable",
+		host, port, user, password, dbname)
+
+	var err error
+	db, err = sql.Open("postgres", psqlInfo)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	ctx = context.Background()
 }
 
 func main() {
@@ -66,7 +82,17 @@ func main() {
 
 	elMessageChannel := make(chan []*Customer)
 
-	numOfSpawnedGoRoutines := spawnProducers(elMessageChannel)
+	numOfCustomers, err := models.Customers().Count(ctx, db)
+	if err != nil {
+		panic(err)
+	}
+
+	numOfSpawnedGoRoutines := int(numOfCustomers) / querySize
+	if (int(numOfCustomers) % querySize) != 0 {
+		numOfSpawnedGoRoutines++
+	}
+	
+	go spawnProducers(elMessageChannel)
 
 	idx := 0
 	var collectedData []*Customer
@@ -286,18 +312,8 @@ func indexCustomers(customers []*Customer) {
 
 }
 
-func spawnProducers(_elMessageChannel chan<- []*Customer) int {
-	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
-		"password=%s dbname=%s sslmode=disable",
-		host, port, user, password, dbname)
-
-	db, err := sql.Open("postgres", psqlInfo)
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	ctx := context.Background()
-
+func spawnProducers(_elMessageChannel chan<- []*Customer) {
+	
 	numOfRecords, err := models.Customers().Count(ctx, db)
 	if err != nil {
 		log.Fatalln(err)
@@ -305,15 +321,10 @@ func spawnProducers(_elMessageChannel chan<- []*Customer) int {
 
 	convNumOfRecords := int(numOfRecords)
 
-	numOfSpawnedGoRoutines := 0
-
 	for i := 0; i < convNumOfRecords; i += querySize {
 		log.Printf("Indexing records from %d to %d", i, i+querySize)
 		go fetchCustomers(ctx, db, _elMessageChannel, querySize, i)
-		numOfSpawnedGoRoutines++
 	}
-
-	return numOfSpawnedGoRoutines
 }
 
 func fetchCustomers(ctx context.Context, db *sql.DB, ch chan<- []*Customer, _limit int, _offset int) {
