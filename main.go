@@ -48,20 +48,25 @@ const (
 )
 
 var (
-	querySize int
-	batch     int
-	db		  *sql.DB
-	ctx		  context.Context
+	querySize 			int
+	batch     			int
+	maxConnectionsDB	int
+	maxGoroutines		int
+	db        			*sql.DB
+	ctx       			context.Context
 )
 
 func init() {
 	//parse commandline parameters
 	flag.IntVar(&querySize, "querySize", 100, "Number of customers pulled in one query")
 	flag.IntVar(&batch, "batch", 255, "Number of documents to send in one batch")
+	flag.IntVar(&maxConnectionsDB, "maxConnectionsDB", 20, "Number of DB Connections used for dbPool")
+	flag.IntVar(&maxGoroutines, "goroutines", 100000, "Limit amount of concurrently executed go routines")
 	flag.Parse()
 
 	rand.Seed(time.Now().UnixNano())
 
+	//TODO bring into seperate package
 	//open global db connecion
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
 		"password=%s dbname=%s sslmode=disable",
@@ -72,6 +77,11 @@ func init() {
 	if err != nil {
 		log.Fatalln(err)
 	}
+
+	db.SetMaxOpenConns(maxConnectionsDB)
+	db.SetMaxIdleConns(maxConnectionsDB)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
 
 	ctx = context.Background()
 }
@@ -91,7 +101,7 @@ func main() {
 	if (int(numOfCustomers) % querySize) != 0 {
 		numOfSpawnedGoRoutines++
 	}
-	
+
 	go spawnProducers(elMessageChannel)
 
 	idx := 0
@@ -313,17 +323,24 @@ func indexCustomers(customers []*Customer) {
 }
 
 func spawnProducers(_elMessageChannel chan<- []*Customer) {
-	
+
 	numOfRecords, err := models.Customers().Count(ctx, db)
 	if err != nil {
 		log.Fatalln(err)
 	}
 
+	//cap max exectuted go routines with channel
+	goRoutineThreshold := make(chan struct{}, maxGoroutines)
+
 	convNumOfRecords := int(numOfRecords)
 
 	for i := 0; i < convNumOfRecords; i += querySize {
-		log.Printf("Indexing records from %d to %d", i, i+querySize)
-		go fetchCustomers(ctx, db, _elMessageChannel, querySize, i)
+		goRoutineThreshold <- struct{}{}
+		go func(n int){
+			log.Printf("Indexing records from %d to %d", n, n+querySize)
+			fetchCustomers(ctx, db, _elMessageChannel, querySize, n)
+			<-goRoutineThreshold
+		}(i)		
 	}
 }
 
