@@ -19,18 +19,21 @@ import (
 	. "github.com/volatiletech/sqlboiler/queries/qm"
 )
 
+//Customer -> top-level struct
 type Customer struct {
 	CustomerID          int64    `json:"customer_id"`
-	CustomerDescription string   `json:"customer_description`
+	CustomerDescription string   `json:"customer_description"`
 	Orders              []*Order `json:"orders"`
 }
 
+//Order -> refs to Customer
 type Order struct {
 	OrderID          int64   `json:"order_id"`
 	OrderDescription string  `json:"order_description"`
 	Items            []*Item `json:"items"`
 }
 
+//Item -> refs to Order
 type Item struct {
 	ItemID          int64  `json:"item_id"`
 	ItemDescription string `json:"item_description"`
@@ -67,10 +70,12 @@ func main() {
 
 	idx := 0
 	var collectedData []*Customer
+
+	//TODO: refactor size per indexing command
 	for data := range elMessageChannel {
 		idx++
 		collectedData = append(collectedData, data...)
-		if idx%7 == 0 {
+		if len(collectedData) >= 500 {
 			indexCustomers(collectedData)
 			collectedData = nil
 		}
@@ -304,14 +309,14 @@ func spawnProducers(_elMessageChannel chan<- []*Customer) int {
 
 	for i := 0; i < convNumOfRecords; i += querySize {
 		log.Printf("Indexing records from %d to %d", i, i+querySize)
-		go fetchCustomers(db, ctx, _elMessageChannel, querySize, i)
+		go fetchCustomers(ctx, db, _elMessageChannel, querySize, i)
 		numOfSpawnedGoRoutines++
 	}
 
 	return numOfSpawnedGoRoutines
 }
 
-func fetchCustomers(db *sql.DB, ctx context.Context, ch chan<- []*Customer, _limit int, _offset int) {
+func fetchCustomers(ctx context.Context, db *sql.DB, ch chan<- []*Customer, _limit int, _offset int) {
 
 	custmrs, err := models.Customers(Load("Orders.Items"), Limit(_limit), Offset(_offset)).All(ctx, db)
 	if err != nil {
